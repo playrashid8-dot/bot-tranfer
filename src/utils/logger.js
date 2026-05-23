@@ -1,6 +1,10 @@
 const { config } = require('./config');
 const { appendLog, formatTimestamp } = require('./helpers');
 
+function isDebugEnabled() {
+  return Boolean(config.debug);
+}
+
 function logTransaction({ wallet, amount, txHash, success, error, dryRun = false }) {
   const entry = {
     timestamp: formatTimestamp(),
@@ -50,9 +54,26 @@ function logWarn(message, meta = {}) {
   console.warn(`[WARN] ${message}`, Object.keys(meta).length ? meta : '');
 }
 
+function logDebug(message, meta = {}) {
+  if (!isDebugEnabled()) {
+    return;
+  }
+
+  const line = JSON.stringify({
+    timestamp: formatTimestamp(),
+    level: 'debug',
+    message,
+    ...meta,
+  });
+  appendLog(config.paths.txLog, line);
+  console.log(`[DEBUG] ${message}`, Object.keys(meta).length ? meta : '');
+}
+
 module.exports = {
   logTransaction,
   logInfo,
   logError,
   logWarn,
+  logDebug,
+  isDebugEnabled,
 };

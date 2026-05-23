@@ -5,6 +5,15 @@ const { ensureDir, normalizeAddress } = require('./helpers');
 
 const CSV_HEADER = 'wallet_address,last_seen,status\n';
 
+function ensureWalletsCsv() {
+  const filePath = config.paths.walletsCsv;
+  ensureDir(config.paths.data);
+
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, CSV_HEADER, 'utf8');
+  }
+}
+
 function walletExists(rows, address) {
   const normalized = normalizeAddress(address);
   return rows.some((row) => normalizeAddress(row.wallet_address) === normalized);
@@ -74,8 +83,9 @@ async function updateWalletStatus(address, status) {
 }
 
 async function getPendingWallets() {
+  ensureWalletsCsv();
   const rows = await readWallets();
-  return rows.filter((row) => row.status === 'pending');
+  return rows.filter((row) => String(row.status).trim().toLowerCase() === 'pending');
 }
 
 async function getWalletStats() {
@@ -105,4 +115,5 @@ module.exports = {
   getPendingWallets,
   getWalletStats,
   walletExists,
+  ensureWalletsCsv,
 };

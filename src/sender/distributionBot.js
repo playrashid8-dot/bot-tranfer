@@ -1,13 +1,13 @@
 const { ethers } = require('ethers');
-const { config, validateConfig } = require('../utils/config');
+const { config, validateConfig, logStartupValidation } = require('../utils/config');
 const {
   pickRandom,
   randomDelay,
   sleep,
   initDataDirs,
 } = require('../utils/helpers');
-const { logInfo, logWarn, logError, logTransaction } = require('../utils/logger');
-const { getPendingWallets, updateWalletStatus } = require('../utils/csvStorage');
+const { logInfo, logWarn, logError, logTransaction, logDebug } = require('../utils/logger');
+const { getPendingWallets, updateWalletStatus, ensureWalletsCsv, getWalletStats } = require('../utils/csvStorage');
 const { markProcessed, isProcessed } = require('../utils/cache');
 const { canSendMore, recordSend, getRateLimitReport } = require('../utils/rateLimiter');
 const { verifySendReadiness } = require('../utils/gasChecker');
@@ -29,11 +29,18 @@ function getRandomAmount(decimals) {
 
 function getRandomizedExecutionWindowDelayMs() {
   const hour = new Date().getHours();
-  // Prefer off-peak windows to reduce burst-like behavior
   if (hour >= 1 && hour <= 6) {
     return randomDelay(10_000, 20_000);
   }
   return randomDelay(config.minDelayMs, config.maxDelayMs);
+}
+
+function createSigner(provider) {
+  try {
+    return new ethers.Wallet(config.privateKey, provider);
+  } catch (error) {
+    throw new Error(`Failed to create wallet signer: ${error.message}. Check PRIVATE_KEY format (64 hex chars, no spaces).`);
+  }
 }
 
 async function sendToWallet({
@@ -60,6 +67,10 @@ async function sendToWallet({
 
   const readiness = await verifySendReadiness(provider, wallet, tokenContract, recipient, amount);
   if (!readiness.ok) {
+    logWarn('Send readiness check failed', {
+      wallet: recipient,
+      reason: readiness.reason,
+    });
     logTransaction({
       wallet: recipient,
       amount: amountLabel,
@@ -68,6 +79,12 @@ async function sendToWallet({
     });
     return { success: false, error: readiness.reason, amount: amountLabel };
   }
+
+  logDebug('Gas estimate ready', {
+    wallet: recipient,
+    gasEstimate: readiness.gasEstimate?.toString(),
+    gasPrice: readiness.gasPrice?.toString(),
+  });
 
   let lastError = null;
 
@@ -101,14 +118,23 @@ async function sendToWallet({
       logWarn('Transfer attempt failed', {
         wallet: recipient,
         attempt,
+        retryLimit: config.retryLimit,
         error: lastError,
       });
 
       if (attempt < config.retryLimit) {
-        await sleep(randomDelay(3000, 8000));
+        const retryDelay = randomDelay(3000, 8000);
+        logInfo('Retrying after delay', { wallet: recipient, attempt: attempt + 1, delayMs: retryDelay });
+        await sleep(retryDelay);
       }
     }
   }
+
+  logError('Transfer failed after all retries', {
+    wallet: recipient,
+    attempts: config.retryLimit,
+    error: lastError,
+  });
 
   logTransaction({
     wallet: recipient,
@@ -120,13 +146,32 @@ async function sendToWallet({
   return { success: false, error: lastError, amount: amountLabel };
 }
 
+async function validateWalletQueue() {
+  ensureWalletsCsv();
+  const stats = await getWalletStats();
+  const pending = await getPendingWallets();
+  const eligible = pending.filter((row) => !isProcessed(row.wallet_address));
+
+  logInfo('Wallet queue validated', {
+    csvTotal: stats.total,
+    csvPending: stats.pending,
+    csvSent: stats.sent,
+    csvFailed: stats.failed,
+    eligibleForSend: eligible.length,
+  });
+
+  return { stats, pending, eligible };
+}
+
 async function runDistributionBot(options = {}) {
   initDataDirs();
+  ensureWalletsCsv();
   validateConfig(true);
+  logStartupValidation(true);
 
   const dryRun = options.dryRun ?? config.dryRun;
   const provider = await getWorkingProvider();
-  const signer = new ethers.Wallet(config.privateKey, provider);
+  const signer = createSigner(provider);
   const tokenContract = new ethers.Contract(config.tokenAddress, config.erc20Abi, signer);
   const decimals = await tokenContract.decimals();
   const symbol = await tokenContract.symbol();
@@ -144,22 +189,26 @@ async function runDistributionBot(options = {}) {
     return { sent: 0, failed: 0, skipped: 0, reason: limitCheck.reason };
   }
 
-  const pending = await getPendingWallets();
-  const eligible = shuffle(pending).filter((row) => !isProcessed(row.wallet_address));
+  const { eligible } = await validateWalletQueue();
+  const shuffled = shuffle(eligible);
 
-  if (eligible.length === 0) {
-    logInfo('No pending wallets available for distribution');
+  if (shuffled.length === 0) {
+    logWarn('No pending wallets available for distribution', {
+      skipReason: 'Queue empty or all pending wallets already processed',
+      hint: 'Run `npm run scan` to populate data/wallets.csv',
+    });
     return { sent: 0, failed: 0, skipped: 0, reason: 'no_pending_wallets' };
   }
 
   const batchSize = Math.min(
-    eligible.length,
+    shuffled.length,
     limitCheck.remainingHour,
     limitCheck.remainingDay
   );
 
   logInfo('Processing batch', {
     batchSize,
+    queueSize: shuffled.length,
     remainingHour: limitCheck.remainingHour,
     remainingDay: limitCheck.remainingDay,
   });
@@ -175,9 +224,16 @@ async function runDistributionBot(options = {}) {
       break;
     }
 
-    const target = eligible[i];
+    const target = shuffled[i];
     const recipient = ethers.getAddress(target.wallet_address);
     const amount = getRandomAmount(decimals);
+
+    logInfo('Send attempt', {
+      wallet: recipient,
+      amount: ethers.formatUnits(amount, decimals),
+      dryRun,
+      progress: `${i + 1}/${batchSize}`,
+    });
 
     const result = await sendToWallet({
       provider,
@@ -225,4 +281,5 @@ async function runDistributionBot(options = {}) {
 module.exports = {
   runDistributionBot,
   getRateLimitReport,
+  validateWalletQueue,
 };

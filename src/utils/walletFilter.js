@@ -3,6 +3,7 @@ const { config } = require('./config');
 const { isValidAddress, normalizeAddress } = require('./helpers');
 const { loadBlacklist, isProcessed } = require('./cache');
 const { walletExists } = require('./csvStorage');
+const { logDebug } = require('./logger');
 
 async function isExternallyOwnedAccount(provider, address) {
   const code = await provider.getCode(address);
@@ -50,6 +51,7 @@ async function filterWallets(provider, addresses, options = {}) {
   const results = {
     accepted: [],
     rejected: [],
+    rejectionSummary: {},
   };
 
   const unique = [...new Set(addresses.map(normalizeAddress))];
@@ -64,8 +66,13 @@ async function filterWallets(provider, addresses, options = {}) {
 
     if (result.valid) {
       results.accepted.push(checksum);
+      logDebug('Wallet accepted', { wallet: checksum });
     } else {
       results.rejected.push(result);
+      for (const reason of result.reasons) {
+        results.rejectionSummary[reason] = (results.rejectionSummary[reason] || 0) + 1;
+      }
+      logDebug('Wallet rejected', { wallet: checksum, reasons: result.reasons });
     }
   }
 
