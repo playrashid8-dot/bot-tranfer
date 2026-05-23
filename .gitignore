@@ -1,0 +1,7 @@
+node_modules/
+.env
+logs/*.log
+data/processed.json
+data/rate-limits.json
+data/wallet-cache.json
+.DS_Store

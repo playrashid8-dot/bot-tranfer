@@ -1,0 +1,32 @@
+{
+  "name": "mgpt-bsc-automation",
+  "version": "1.0.0",
+  "description": "Educational BSC wallet scanner and controlled MGPT token distribution system",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "scan": "node src/index.js scan",
+    "send": "node src/index.js send",
+    "status": "node src/index.js status",
+    "dry-run": "node src/index.js send --dry-run"
+  },
+  "keywords": [
+    "bsc",
+    "web3",
+    "ethers",
+    "mgpt",
+    "automation"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "commander": "^12.1.0",
+    "csv-parser": "^3.0.0",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5"
+  }
+}
